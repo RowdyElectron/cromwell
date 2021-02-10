@@ -788,8 +788,8 @@ cromwell::private::exec_test_script() {
 
 cromwell::private::stop_travis_defaults() {
   # https://stackoverflow.com/questions/27382295/how-to-stop-services-on-travis-ci-running-by-default#answer-27410479
-  sudo /etc/init.d/mysql stop
-  sudo /etc/init.d/postgresql stop
+  sudo /etc/init.d/mysql stop || true
+  sudo /etc/init.d/postgresql stop || true
 }
 
 cromwell::private::delete_boto_config() {
@@ -805,12 +805,34 @@ cromwell::private::delete_sbt_boot() {
     rm -rf ~/.sbt/boot/
 }
 
+cromwell::private::install_adoptopenjdk() {
+    # https://adoptopenjdk.net/installation.html#linux-pkg-deb
+    sudo apt-get install wget apt-transport-https gnupg
+    wget -qO - https://adoptopenjdk.jfrog.io/adoptopenjdk/api/gpg/key/public |
+        sudo apt-key add -
+    echo "deb https://adoptopenjdk.jfrog.io/adoptopenjdk/deb $(
+            grep UBUNTU_CODENAME /etc/os-release | cut -d = -f 2
+        ) main" |
+        sudo tee /etc/apt/sources.list.d/adoptopenjdk.list
+    sudo apt-get update
+    sudo apt-get install adoptopenjdk-11-hotspot
+}
+
+cromwell::private::install_sbt() {
+    # https://www.scala-sbt.org/1.x/docs/Installing-sbt-on-Linux.html#Ubuntu+and+other+Debian-based+distributions
+    echo "deb https://dl.bintray.com/sbt/debian /" | sudo tee -a /etc/apt/sources.list.d/sbt.list
+    curl -sL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x2EE0EA64E40A89B84B2DF73499E82A75642AC823" |
+        sudo apt-key add
+    sudo apt-get update
+    sudo apt-get install -y sbt
+}
+
 cromwell::private::pip_install() {
     local pip_package
     pip_package="${1:?pip_install called without a package}"; shift
 
     if [[ "${CROMWELL_BUILD_IS_CI}" == "true" ]]; then
-        sudo -H "${PYTHON3_HOME}/bin/pip" install "${pip_package}" "$@"
+        sudo -H "$(command -v pip)" install "${pip_package}" "$@"
     elif [[ "${CROMWELL_BUILD_IS_VIRTUAL_ENV}" == "true" ]]; then
         pip install "${pip_package}" "$@"
     else
@@ -953,14 +975,6 @@ cromwell::private::start_docker_databases() {
         cromwell::private::start_docker_postgresql \
             "${CROMWELL_BUILD_POSTGRESQL_LATEST_TAG}" "${CROMWELL_BUILD_POSTGRESQL_LATEST_PORT}"
     fi
-}
-
-cromwell::private::pull_common_docker_images() {
-    # All tests use ubuntu:latest - make sure it's there before starting the tests
-    # because pulling the image during some of the tests would cause them to fail
-    # (specifically output_redirection which expects a specific value in stderr)
-    # Use cat to quiet docker: https://github.com/moby/moby/issues/36655#issuecomment-375136087
-    docker pull ubuntu | cat
 }
 
 cromwell::private::install_cwltest() {
@@ -1342,9 +1356,8 @@ cromwell::build::exec_test_script() {
     cromwell::private::exec_test_script
 }
 
-cromwell::private::pull_common_docker_images_and_start_docker_databases() {
+cromwell::private::create_database_variables_and_start_docker_databases() {
   if [[ "${BUILD_TYPE}" != "sbt" ]]; then
-      cromwell::private::pull_common_docker_images
       cromwell::private::create_database_variables
       cromwell::private::start_docker_databases
   fi
@@ -1359,26 +1372,28 @@ cromwell::build::setup_common_environment() {
     cromwell::private::install_git_secrets
     cromwell::private::install_minnie_kenny
     cromwell::private::install_wait_for_it
-    cromwell::private::setup_secure_resources
 
     case "${CROMWELL_BUILD_PROVIDER}" in
         "${CROMWELL_BUILD_PROVIDER_TRAVIS}")
             cromwell::private::stop_travis_defaults
+            cromwell::private::install_adoptopenjdk
+            cromwell::private::install_sbt
             cromwell::private::delete_boto_config
             cromwell::private::delete_sbt_boot
             cromwell::private::upgrade_pip
-            cromwell::private::pull_common_docker_images_and_start_docker_databases
+            cromwell::private::create_database_variables_and_start_docker_databases
             ;;
         "${CROMWELL_BUILD_PROVIDER_CIRCLE}")
-            cromwell::private::pull_common_docker_images_and_start_docker_databases
+            cromwell::private::create_database_variables_and_start_docker_databases
             ;;
         "${CROMWELL_BUILD_PROVIDER_JENKINS}")
             cromwell::private::create_database_variables
             ;;
         *)
-            cromwell::private::pull_common_docker_images
             ;;
     esac
+
+    cromwell::private::setup_secure_resources
 }
 
 
